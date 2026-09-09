@@ -21,8 +21,8 @@ export function App() {
   const [snapshot, setSnapshot] = useState(null), [members, setMembers] = useState([]);
   const [history, setHistory] = useState([]);
   const [phaseId, setPhaseId] = useState(''), [dialog, setDialog] = useState(null);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [sync, setSync] = useState('');
-  const locked = useRef(false);
+  const [busy, setBusy] = useState(false), [exporting, setExporting] = useState(false), [error, setError] = useState(''), [sync, setSync] = useState('');
+  const locked = useRef(false), reportRef = useRef(null);
   const isPM = user?.role === 'pm';
   useEffect(() => { api('session').then(x => setUser(x.user)).catch(e => setError(e.message)).finally(() => setChecking(false)); }, []);
   useEffect(() => {
@@ -55,6 +55,27 @@ export function App() {
     catch (e) { setError(e.message); if (e.status === 401) setUser(null); }
     finally { setBusy(false); }
   }
+  async function downloadReport() {
+    if (exporting || !reportRef.current) return;
+    setExporting(true); setError('');
+    try {
+      await document.fonts?.ready;
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const sheets = [...reportRef.current.querySelectorAll('.pdf-sheet')];
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+      for (let index = 0; index < sheets.length; index++) {
+        if (index) pdf.addPage();
+        const canvas = await html2canvas(sheets[index], { scale: 2, backgroundColor: '#ffffff', logging: false, useCORS: true });
+        pdf.addImage(canvas.toDataURL('image/jpeg', .92), 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+      }
+      const stamp = new Date().toLocaleDateString('en-CA');
+      const projectName = data.project.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '') || 'Project';
+      pdf.save(`${projectName}-Report-${stamp}.pdf`);
+      setSync('Đã tải report PDF');
+    } catch {
+      setError('Không thể tạo report PDF. Vui lòng thử lại.');
+    } finally { setExporting(false); }
+  }
   if (checking) return <Gate><p>Đang kiểm tra đăng nhập…</p></Gate>;
   if (!user) return <Login onSuccess={u => { setError(''); setUser(u); }} initialError={error}/>;
   if (!snapshot) return <Gate><p>{error || 'Đang tải project…'}</p><button onClick={() => location.reload()}>Thử lại</button><button onClick={logout}>Đăng xuất</button></Gate>;
@@ -85,6 +106,7 @@ export function App() {
   return <div className="tracker">
     <header className="topbar"><div className="identity"><span className="mark">B</span><div><h1>{data.project.name}</h1><p>{data.project.subtitle}</p></div></div>
       <div className="file-actions"><div className="account-badge"><strong>{user.name}</strong><span>{roles[user.role]}</span></div>
+        <button disabled={busy || exporting} onClick={downloadReport}>{exporting ? 'Đang tạo PDF…' : 'Tải PDF'}</button>
         {isPM && <><button disabled={busy} onClick={openHistory}>Lịch sử</button><button disabled={busy} onClick={() => setDialog({ type: 'members' })}>Thành viên</button><button disabled={busy} onClick={() => setDialog({ type: 'control' })}>Control panel</button><button disabled={busy} className="accent" onClick={() => setDialog({ type: 'phase' })}>+ Phase</button></>}
         <button disabled={busy} onClick={logout}>Đăng xuất</button>
       </div>
@@ -103,6 +125,7 @@ export function App() {
         onRemove={() => remove('group', group.id)} onRemoveItem={id => remove('item', group.id, id)} onToggle={item => toggle(group.id, item)}/>)}</div>}
     </section></main>
     <footer><span className={`sync ${busy ? 'saving' : error ? 'error' : 'saved'}`} role="status">{sync}</span></footer>
+    <ReportDocument reportRef={reportRef} data={data} user={user}/>
     {dialog?.type === 'history' ? <History entries={history} onClose={close}/> :
       dialog?.type === 'members' ? <Members members={members} busy={busy} error={error} onClose={close} onCreate={async form => write('users', 'POST', form, x => setMembers(m => [...m, x.user]))} onActive={async member => write('users', 'PATCH', { id: member.id, active: !member.active }, x => setMembers(m => m.map(u => u.id === x.user.id ? x.user : u)))}/> :
       dialog?.type === 'control' ? <ControlPanel data={data} busy={busy} error={error} onClose={close} onSave={async next => { if (await saveData(next)) close(); }}/> :
@@ -110,6 +133,69 @@ export function App() {
       dialog ? <Editor key={`${dialog.type}-${dialog.target?.id || 'new'}`} dialog={dialog} members={members} busy={busy} error={error} onClose={close} onSave={saveEditor}/> : null}
   </div>;
 }
+
+function ReportDocument({ reportRef, data, user }) {
+  const allItems = data.phases.flatMap(itemsOf);
+  const totals = {
+    todo: allItems.filter(item => item.status === 'todo').length,
+    progress: allItems.filter(item => item.status === 'progress').length,
+    done: allItems.filter(item => item.status === 'done').length,
+    blocked: allItems.filter(item => item.status === 'blocked').length,
+  };
+  const pages = reportPages(data.phases);
+  const generatedAt = new Date().toLocaleString('vi-VN', { dateStyle: 'long', timeStyle: 'short' });
+  return <div className="pdf-report-root" ref={reportRef} aria-hidden="true">
+    <section className="pdf-sheet pdf-cover">
+      <ReportHeader data={data}/>
+      <div className="pdf-title-block"><span>PROJECT PROGRESS REPORT</span><h1>{data.project.name}</h1><p>{data.project.subtitle}</p></div>
+      <div className="pdf-overall"><div><strong>{percentage(allItems)}%</strong><span>Overall progress</span></div><p>Báo cáo tổng quan tiến độ và danh sách công việc hiện tại của dự án.</p></div>
+      <div className="pdf-summary-grid">
+        {[['Total tasks', allItems.length, 'neutral'], ['Done', totals.done, 'done'], ['In progress', totals.progress, 'progress'], ['Blocked', totals.blocked, 'blocked'], ['To do', totals.todo, 'todo']].map(([label, value, tone]) => <div className={tone} key={label}><strong>{value}</strong><span>{label}</span></div>)}
+      </div>
+      <div className="pdf-section-heading"><h2>Progress by phase</h2><span>{data.phases.length} phases</span></div>
+      <div className="pdf-phase-list">{data.phases.map((phase, index) => { const value = percentage(itemsOf(phase)); return <div key={phase.id}><span className="pdf-phase-number">{phase.symbol || index + 1}</span><b>{phase.name}</b><div className="pdf-progress"><i style={{ width: `${value}%`, background: phase.color || colors[index % colors.length] }}/></div><strong>{value}%</strong></div>; })}</div>
+      <ReportFooter page={1} total={pages.length + 1} generatedAt={generatedAt} user={user}/>
+    </section>
+    {pages.map(({ phase, phaseIndex, groups, part }, index) => <section className="pdf-sheet pdf-detail" key={`${phase.id}-${part}`}>
+      <ReportHeader data={data}/>
+      <div className="pdf-detail-title"><span>PHASE {phaseIndex + 1} OF {data.phases.length}{part > 1 ? ` · PART ${part}` : ''}</span><h2>{phase.name}</h2><p>{phase.description}</p></div>
+      {groups.length ? groups.map(({ group, items, continued }) => <div className="pdf-group-block" key={`${group.id}-${continued ? items[0]?.id : 'start'}`}>
+        <div className="pdf-group-heading"><div><span>GROUP OF WORK{continued ? ' · CONTINUED' : ''}</span><h3>{group.name}</h3>{!continued && group.description && <p>{group.description}</p>}</div><strong>{group.items.filter(item => item.status === 'done').length}/{group.items.length}<small>DONE</small></strong></div>
+        <div className="pdf-task-table"><div className="pdf-task-head"><span/><span>Task</span><span>Owner</span><span>Due</span><span>Status</span></div>
+          {items.map(item => <div className="pdf-task-row" key={item.id}><span className={`pdf-check ${item.status === 'done' ? 'checked' : ''}`}>{item.status === 'done' ? '✓' : ''}</span><div><b>{item.title}</b>{item.notes && <small>{item.notes}</small>}</div><span>{item.owner || 'Chưa assign'}</span><span>{dateLabel(item.due)}</span><span><i className={`pdf-status ${item.status}`}>{statuses[item.status]}</i></span></div>)}
+        </div>
+      </div>) : <div className="pdf-empty">Phase này chưa có nhóm công việc hoặc task.</div>}
+      <ReportFooter page={index + 2} total={pages.length + 1} generatedAt={generatedAt} user={user}/>
+    </section>)}
+  </div>;
+}
+function reportPages(phases) {
+  const maxUnits = 28;
+  return phases.flatMap((phase, phaseIndex) => {
+    if (!phase.groups.length) return [{ phase, phaseIndex, groups: [], part: 1 }];
+    const pages = []; let groups = [], used = 0, part = 1;
+    const flush = () => { if (groups.length) pages.push({ phase, phaseIndex, groups, part: part++ }); groups = []; used = 0; };
+    for (const group of phase.groups) {
+      if (!group.items.length) {
+        if (used + 2 > maxUnits) flush();
+        groups.push({ group, items: [], continued: false }); used += 2; continue;
+      }
+      const wholeGroupUnits = group.items.length + 2;
+      if (wholeGroupUnits <= maxUnits && used && used + wholeGroupUnits > maxUnits) flush();
+      let offset = 0;
+      while (offset < group.items.length) {
+        if (used + 3 > maxUnits) flush();
+        const take = Math.min(group.items.length - offset, maxUnits - used - 2);
+        groups.push({ group, items: group.items.slice(offset, offset + take), continued: offset > 0 });
+        used += take + 2; offset += take;
+        if (offset < group.items.length) flush();
+      }
+    }
+    flush(); return pages;
+  });
+}
+function ReportHeader({ data }) { return <header className="pdf-header"><span className="pdf-mark">B</span><div><strong>{data.project.name}</strong><small>LINE COLLECTIVE · PROJECT TRACKER</small></div><span>CONFIDENTIAL</span></header>; }
+function ReportFooter({ page, total, generatedAt, user }) { return <footer className="pdf-footer"><span>Generated {generatedAt} · {user.name}</span><strong>{page} / {total}</strong></footer>; }
 
 function Gate({ children }) { return <main className="gate"><div className="gate-card"><span className="mark">B</span><h1>Project Tracker</h1>{children}</div></main>; }
 function Login({ onSuccess, initialError }) {

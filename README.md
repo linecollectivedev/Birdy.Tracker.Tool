@@ -12,6 +12,8 @@
 
 PM có thể xem lịch sử task được hoàn thành hoặc mở lại, gồm người thực hiện, username, phase/group và thời gian. Server tự tạo log theo phiên đăng nhập; client không tự khai báo actor.
 
+Mọi tài khoản đã đăng nhập có thể dùng nút **Tải PDF** để xuất report A4 của trạng thái project hiện tại. Report gồm tổng tiến độ, breakdown theo status, tiến độ từng phase và danh sách task theo phase/group. Danh sách dùng checkbox giống giao diện web và tự gom nhiều group lên một trang; report không đưa lịch sử hoạt động nội bộ vào file.
+
 ## Yêu cầu
 
 - Node.js 20 trở lên

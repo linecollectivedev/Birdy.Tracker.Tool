@@ -17,10 +17,12 @@
   "dependencies": {
     "@neondatabase/serverless": "1.0.2",
     "@vitejs/plugin-react": "5.0.4",
-    "vite": "6.4.2",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "react": "19.2.0",
     "react-circular-progressbar": "2.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "vite": "6.4.2"
   },
   "devDependencies": {
     "esbuild": "0.25.11"
