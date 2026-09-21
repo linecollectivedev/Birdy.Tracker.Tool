@@ -135,6 +135,19 @@ test('deactivating account invalidates sessions and prevents login', async () =>
 test('PM accounts cannot be disabled', async () => {
   const {call} = fixture(); assert.equal((await call('users','PATCH','pm',{id:'pm',active:false})).statusCode,403);
 });
+test('PM changes member roles, cannot change self, and viewer assignments are unlinked', async () => {
+  const {call,cookies} = fixture();
+  assert.equal((await call('users','PATCH','contributor',{id:'viewer',role:'contributor'})).statusCode,403);
+  assert.equal((await call('users','PATCH','pm',{id:'pm',role:'viewer'})).statusCode,403);
+  const promoted = await call('users','PATCH','pm',{id:'viewer',role:'contributor'});
+  assert.equal(promoted.statusCode,200); assert.equal(promoted.body.user.role,'contributor');
+  const changed = await call('users','PATCH','pm',{id:'contributor',role:'viewer'});
+  assert.equal(changed.statusCode,200); assert.equal(changed.body.user.role,'viewer');
+  assert.equal(changed.body.state.version,3);
+  const item = changed.body.state.data.phases[0].groups[0].items[0];
+  assert.equal(item.assigneeId,undefined); assert.equal(item.owner,'contributor');
+  assert.equal((await call('data','GET',cookies.contributor)).statusCode,401);
+});
 test('only PM deletes non-PM accounts and assigned tasks are safely unlinked', async () => {
   const {call,store} = fixture();
   assert.equal((await call('users','DELETE','viewer',{id:'contributor'})).statusCode,403);

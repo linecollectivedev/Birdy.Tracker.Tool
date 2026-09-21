@@ -71,9 +71,18 @@ export function createHandlers(store) {
       return res.status(201).json({ user: publicUser(account) });
     }
     if (req.method === 'PATCH') {
-      const { id, active } = req.body || {};
+      const { id, active, role } = req.body || {};
       const target = typeof id === 'string' ? await store.userById(id) : null;
-      if (!target || typeof active !== 'boolean') return res.status(400).json({ error: 'Tài khoản không hợp lệ' });
+      if (!target) return res.status(400).json({ error: 'Tài khoản không hợp lệ' });
+      if (role !== undefined) {
+        if (!roles.includes(role)) return res.status(400).json({ error: 'Role không hợp lệ' });
+        if (target.id === user.id && role !== target.role) return res.status(403).json({ error: 'Bạn không thể thay đổi role của chính mình' });
+        if (role === target.role) return res.json({ user: publicUser(target), state: await store.read() });
+        const changed = await store.setRole(id, role);
+        if (!changed) return res.status(409).json({ error: 'Dữ liệu vừa thay đổi. Vui lòng thử lại.' });
+        return res.json({ user: publicUser(changed.user), state: changed.state });
+      }
+      if (typeof active !== 'boolean') return res.status(400).json({ error: 'Trạng thái tài khoản không hợp lệ' });
       // PM accounts cannot be disabled here, preventing removal of the last PM.
       if (target.role === 'pm') return res.status(403).json({ error: 'Không thể khóa tài khoản Project Manager tại đây' });
       return res.json({ user: publicUser(await store.setActive(id, active)) });
