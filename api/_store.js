@@ -20,6 +20,16 @@ export function createMemoryStore(users = [], data = defaultData) {
     userByName: async name => structuredClone(accounts.find(u => u.username === name)),
     addUser: async user => { if (accounts.some(u => u.username === user.username)) return false; accounts.push(structuredClone(user)); return true; },
     setActive: async (id, active) => { const user = accounts.find(u => u.id === id); if (!user) return null; user.active = active; user.revision++; return structuredClone(user); },
+    removeUser: async id => {
+      const index = accounts.findIndex(u => u.id === id);
+      if (index < 0 || accounts[index].role === 'pm') return null;
+      const [user] = accounts.splice(index, 1), data = structuredClone(state.data);
+      for (const item of data.phases.flatMap(phase => phase.groups).flatMap(group => group.items)) {
+        if (item.assigneeId === id) { delete item.assigneeId; item.owner ||= user.name; }
+      }
+      state = { data, version: state.version + 1 };
+      return { userId: id, state: structuredClone(state) };
+    },
     revoke: async id => { const user = accounts.find(u => u.id === id); if (user) user.revision++; },
     read: async () => structuredClone(state),
     history: async () => structuredClone(history.slice().reverse()),
@@ -66,6 +76,28 @@ export function createDatabaseStore() {
     userByName: async name => (await sql`SELECT *, password_hash AS "passwordHash" FROM tracker_users WHERE username=${name}`)[0],
     addUser: async u => (await sql`INSERT INTO tracker_users (id,username,name,role,password_hash) VALUES (${u.id},${u.username},${u.name},${u.role},${u.passwordHash}) ON CONFLICT (username) DO NOTHING RETURNING id`).length > 0,
     setActive: async (id, active) => (await sql`UPDATE tracker_users SET active=${active},revision=revision+1 WHERE id=${id} RETURNING *`)[0],
+    removeUser: async id => {
+      const current = (await sql`SELECT data,version FROM tracker_state WHERE id='birdy-main'`)[0];
+      const target = (await sql`SELECT id,name,role FROM tracker_users WHERE id=${id}`)[0];
+      if (!current || !target || target.role === 'pm') return null;
+      const data = structuredClone(current.data);
+      for (const item of data.phases.flatMap(phase => phase.groups).flatMap(group => group.items)) {
+        if (item.assigneeId === id) { delete item.assigneeId; item.owner ||= target.name; }
+      }
+      const removed = (await sql`
+        WITH updated AS (
+          UPDATE tracker_state SET data=${JSON.stringify(data)}::jsonb,version=version+1,updated_at=NOW()
+          WHERE id='birdy-main' AND version=${current.version}
+            AND EXISTS (SELECT 1 FROM tracker_users WHERE id=${id} AND role<>'pm')
+          RETURNING data,version
+        ), deleted AS (
+          DELETE FROM tracker_users WHERE id=${id} AND role<>'pm' AND EXISTS (SELECT 1 FROM updated)
+          RETURNING id
+        )
+        SELECT deleted.id AS "userId",updated.data,updated.version FROM deleted CROSS JOIN updated
+      `)[0];
+      return removed ? { userId: removed.userId, state: { data: removed.data, version: removed.version } } : null;
+    },
     revoke: async id => { await sql`UPDATE tracker_users SET revision=revision+1 WHERE id=${id}`; },
     read: async () => (await sql`SELECT data,version FROM tracker_state WHERE id='birdy-main'`)[0],
     history: async () => sql`SELECT id,user_id AS "userId",user_name AS "userName",username,action,task_id AS "taskId",task_title AS "taskTitle",phase_id AS "phaseId",phase_name AS "phaseName",group_id AS "groupId",group_name AS "groupName",event_at AS "eventAt" FROM tracker_task_history ORDER BY event_at DESC LIMIT 200`,

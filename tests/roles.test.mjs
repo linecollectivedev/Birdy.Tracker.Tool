@@ -26,7 +26,7 @@ function fixture() {
 }
 test('anonymous cannot read or write data or manage users', async () => {
   const {call} = fixture();
-  for (const [route,method] of [['data','GET'],['data','PUT'],['data','PATCH'],['users','GET'],['users','POST'],['history','GET']]) assert.equal((await call(route,method)).statusCode,401);
+  for (const [route,method] of [['data','GET'],['data','PUT'],['data','PATCH'],['users','GET'],['users','POST'],['users','DELETE'],['history','GET']]) assert.equal((await call(route,method)).statusCode,401);
 });
 test('individual login rejects wrong passwords and never exposes hash', async () => {
   const {call} = fixture();
@@ -98,6 +98,16 @@ test('PM edits valid data; invalid assignment or duplicate IDs rejected', async 
   data.phases[1].id = data.phases[0].id;
   assert.equal((await call('data','PUT','pm',{data,version:2})).statusCode,400);
 });
+test('task documents accept paired http links and reject unsafe or incomplete values', async () => {
+  const {data} = fixture();
+  const item = data.phases[0].groups[0].items[0];
+  assert.equal(validateData(data, accounts), true);
+  item.documentName = 'Product brief'; item.documentUrl = 'https://docs.example.com/brief';
+  assert.equal(validateData(data, accounts), true);
+  item.documentUrl = 'javascript:alert(1)';
+  assert.equal(validateData(data, accounts), false);
+  item.documentUrl = ''; assert.equal(validateData(data, accounts), false);
+});
 test('stale and simultaneous writes cannot overwrite a newer version', async () => {
   const {call,toggle,store} = fixture();
   const results = await Promise.all([call('data','PATCH','contributor',toggle),call('data','PATCH','pm',toggle)]);
@@ -124,6 +134,20 @@ test('deactivating account invalidates sessions and prevents login', async () =>
 });
 test('PM accounts cannot be disabled', async () => {
   const {call} = fixture(); assert.equal((await call('users','PATCH','pm',{id:'pm',active:false})).statusCode,403);
+});
+test('only PM deletes non-PM accounts and assigned tasks are safely unlinked', async () => {
+  const {call,store} = fixture();
+  assert.equal((await call('users','DELETE','viewer',{id:'contributor'})).statusCode,403);
+  assert.equal((await call('users','DELETE','pm',{id:'pm'})).statusCode,403);
+  const result = await call('users','DELETE','pm',{id:'contributor'});
+  assert.equal(result.statusCode,200);
+  assert.equal(result.body.userId,'contributor');
+  assert.equal(result.body.state.version,2);
+  const item = result.body.state.data.phases[0].groups[0].items[0];
+  assert.equal(item.assigneeId,undefined);
+  assert.equal(item.owner,'contributor');
+  assert.equal(await store.userById('contributor'),undefined);
+  assert.equal((await call('session','POST',null,{username:'contributor',password})).statusCode,401);
 });
 test('tampered cookie and shared legacy passcode cannot authenticate', async () => {
   const {call,cookies} = fixture();

@@ -7,12 +7,15 @@ export function validateData(data, users) {
   const ids = new Set();
   const entity = x => x && typeof x.id === 'string' && x.id.length <= 100 && x.id.length > 0 && !ids.has(x.id) && (ids.add(x.id), true);
   const text = (s, limit = 5000) => typeof s === 'string' && s.length <= limit;
+  const httpUrl = value => { try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; } };
   for (const p of data.phases) {
     if (!entity(p) || !text(p.name, 200) || !p.name.trim() || !Array.isArray(p.groups) || p.groups.length > 200) return false;
     for (const g of p.groups) {
       if (!entity(g) || !text(g.name, 200) || !g.name.trim() || !Array.isArray(g.items) || g.items.length > 2000) return false;
       for (const i of g.items) {
-        if (!entity(i) || !text(i.title, 500) || !i.title.trim() || !['todo','progress','done','blocked'].includes(i.status) || !text(i.notes ?? '') || !text(i.owner ?? '', 200)) return false;
+        if (!entity(i) || !text(i.title, 500) || !i.title.trim() || !['todo','progress','done','blocked'].includes(i.status) || !text(i.notes ?? '') || !text(i.owner ?? '', 200) || !text(i.documentName ?? '', 200) || !text(i.documentUrl ?? '', 2000)) return false;
+        const documentName = (i.documentName ?? '').trim(), documentUrl = (i.documentUrl ?? '').trim();
+        if (Boolean(documentName) !== Boolean(documentUrl) || (documentUrl && !httpUrl(documentUrl))) return false;
         if (i.assigneeId && !users.some(u => u.id === i.assigneeId && u.role !== 'viewer')) return false;
         if (i.due && (typeof i.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(i.due) || !Number.isFinite(Date.parse(i.due)))) return false;
       }
@@ -74,6 +77,14 @@ export function createHandlers(store) {
       // PM accounts cannot be disabled here, preventing removal of the last PM.
       if (target.role === 'pm') return res.status(403).json({ error: 'Không thể khóa tài khoản Project Manager tại đây' });
       return res.json({ user: publicUser(await store.setActive(id, active)) });
+    }
+    if (req.method === 'DELETE') {
+      const { id } = req.body || {};
+      const target = typeof id === 'string' ? await store.userById(id) : null;
+      if (!target) return res.status(404).json({ error: 'Tài khoản không tồn tại' });
+      if (target.role === 'pm') return res.status(403).json({ error: 'Không thể xóa tài khoản Project Manager' });
+      const removed = await store.removeUser(id);
+      return removed ? res.json(removed) : res.status(409).json({ error: 'Dữ liệu vừa thay đổi. Vui lòng thử lại.' });
     }
     return res.status(405).end();
   }

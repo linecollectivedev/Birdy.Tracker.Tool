@@ -1,4 +1,4 @@
-const item = (id, title, extra = {}) => ({ id, title, owner:"", status:"todo", due:"", notes:"", ...extra });
+const item = (id, title, extra = {}) => ({ id, title, owner:"", status:"todo", due:"", notes:"", documentName:"", documentUrl:"", ...extra });
 const group = (id, name, description, titles) => ({ id, name, description, items: titles.map((title, index) => item(`${id}-${index+1}`, title)) });
 
 export const defaultData = {
@@ -48,5 +48,4 @@ export const defaultData = {
     { id:"maintenance", name:"Maintenance", description:"Post-launch maintenance", groups:[] }
   ]
 };
-
 
