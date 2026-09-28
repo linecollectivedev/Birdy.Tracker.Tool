@@ -110,13 +110,26 @@ export function createHandlers(store) {
       if (!validateData(body.data, await store.users())) return res.status(400).json({ error: 'Dữ liệu hoặc người được assign không hợp lệ' });
       next = body.data;
     } else {
-      if (Object.keys(body).some(k => !['version','phaseId','groupId','itemId','complete'].includes(k)) || typeof body.complete !== 'boolean') return res.status(400).json({ error: 'Chỉ được cập nhật tick hoàn thành' });
       next = structuredClone(current.data);
       const item = next.phases.find(p => p.id === body.phaseId)?.groups.find(g => g.id === body.groupId)?.items.find(i => i.id === body.itemId);
       if (!item) return res.status(404).json({ error: 'Task không tồn tại' });
-      if (user.role !== 'pm' && item.assigneeId !== user.id) return res.status(403).json({ error: 'Bạn chỉ được tick task được giao cho mình' });
-      if (body.complete && item.status !== 'done') { item.previousStatus = item.status; item.status = 'done'; }
-      if (!body.complete && item.status === 'done') { item.status = ['todo','progress','blocked'].includes(item.previousStatus) ? item.previousStatus : 'todo'; delete item.previousStatus; }
+      if (user.role !== 'pm' && item.assigneeId !== user.id) return res.status(403).json({ error: 'Bạn chỉ được cập nhật task được giao cho mình' });
+      if (Object.hasOwn(body, 'complete')) {
+        if (Object.keys(body).some(k => !['version','phaseId','groupId','itemId','complete'].includes(k)) || typeof body.complete !== 'boolean') return res.status(400).json({ error: 'Dữ liệu cập nhật task không hợp lệ' });
+        if (body.complete && item.status !== 'done') { item.previousStatus = item.status; item.status = 'done'; }
+        if (!body.complete && item.status === 'done') { item.status = ['todo','progress','blocked'].includes(item.previousStatus) ? item.previousStatus : 'todo'; delete item.previousStatus; }
+      } else {
+        const allowed = ['version','phaseId','groupId','itemId','status','notes','documentName','documentUrl'];
+        if (Object.keys(body).some(k => !allowed.includes(k)) || !['todo','progress','done','blocked'].includes(body.status) || typeof body.notes !== 'string' || typeof body.documentName !== 'string' || typeof body.documentUrl !== 'string') return res.status(400).json({ error: 'Chỉ được cập nhật status, notes và tài liệu' });
+        const previousStatus = item.status;
+        item.status = body.status;
+        item.notes = body.notes.trim();
+        item.documentName = body.documentName.trim();
+        item.documentUrl = body.documentUrl.trim();
+        if (item.status === 'done' && previousStatus !== 'done') item.previousStatus = previousStatus;
+        if (item.status !== 'done') delete item.previousStatus;
+        if (!validateData(next, await store.users())) return res.status(400).json({ error: 'Notes hoặc thông tin tài liệu không hợp lệ' });
+      }
     }
     const saved = await store.save(next, current.version, historyEvents(current.data, next, user));
     return saved ? res.json(saved) : res.status(409).json({ error: 'Có cập nhật mới. Tải lại dữ liệu trước khi sửa tiếp.', ...await store.read() });

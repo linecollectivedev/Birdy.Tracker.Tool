@@ -87,6 +87,28 @@ test('PATCH rejects hidden field edits and leaves document untouched', async () 
   assert.equal((await call('data','PATCH','contributor',{...toggle,owner:'attacker'})).statusCode,400);
   assert.equal((await store.read()).version,1);
 });
+test('assigned contributor updates only status, notes and document fields', async () => {
+  const {call,toggle,data,store} = fixture();
+  const body = { version: 1, phaseId: toggle.phaseId, groupId: toggle.groupId, itemId: toggle.itemId, status: 'progress', notes: 'Updated note', documentName: 'Design file', documentUrl: 'https://example.com/design' };
+  const result = await call('data','PATCH','contributor',body);
+  assert.equal(result.statusCode,200);
+  const item = result.body.data.phases[0].groups[0].items[0];
+  assert.equal(item.title,'Understand Founder Vision');
+  assert.equal(item.owner,'contributor');
+  assert.equal(item.status,'progress');
+  assert.equal(item.notes,'Updated note');
+  assert.equal(item.documentName,'Design file');
+  assert.equal(item.documentUrl,'https://example.com/design');
+  assert.equal((await call('data','PATCH','contributor',{...body,version:2,title:'Forged title'})).statusCode,400);
+  assert.equal((await store.read()).data.phases[0].groups[0].items[0].title,'Understand Founder Vision');
+  assert.equal((await call('data','PATCH','contributor',{...body,version:2,itemId:data.phases[0].groups[0].items[1].id})).statusCode,403);
+});
+test('contributor task detail rejects incomplete or unsafe document links', async () => {
+  const {call,toggle} = fixture();
+  const body = { version: 1, phaseId: toggle.phaseId, groupId: toggle.groupId, itemId: toggle.itemId, status: 'todo', notes: '', documentName: 'Brief', documentUrl: '' };
+  assert.equal((await call('data','PATCH','contributor',body)).statusCode,400);
+  assert.equal((await call('data','PATCH','contributor',{...body,documentUrl:'javascript:alert(1)'})).statusCode,400);
+});
 test('PM edits valid data; invalid assignment or duplicate IDs rejected', async () => {
   const {call,data} = fixture();
   assert.equal(validateData(data,accounts),true);

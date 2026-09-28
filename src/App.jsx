@@ -87,11 +87,16 @@ export function App() {
   const data = snapshot.data;
   const phase = data.phases.find(p => p.id === phaseId) || data.phases[0];
   const allItems = data.phases.flatMap(itemsOf);
+  const assignedTasks = data.phases.flatMap(p => p.groups.flatMap(group => group.items.filter(item => item.assigneeId === user.id).map(item => ({ item, group, phase: p }))));
   const patchPhase = (next, fn) => { next.phases = next.phases.map(p => p.id === phase.id ? fn(p) : p); };
   async function toggle(groupId, item) {
     await write('data', 'PATCH', { phaseId: phase.id, groupId, itemId: item.id, complete: item.status !== 'done', version: snapshot.version }, setSnapshot);
   }
   async function saveEditor(payload) {
+    if (dialog.type === 'contributorItem') {
+      if (await write('data', 'PATCH', { version: snapshot.version, phaseId: dialog.phaseId, groupId: dialog.groupId, itemId: dialog.target.id, ...payload }, setSnapshot)) setDialog(null);
+      return;
+    }
     const next = structuredClone(data);
     if (dialog.type === 'phase') next.phases.push({ ...payload, id: uid(), symbol: String(next.phases.length + 1), color: colors[next.phases.length % colors.length], groups: [] });
     if (dialog.type === 'editPhase') patchPhase(next, p => ({ ...p, ...payload }));
@@ -107,16 +112,21 @@ export function App() {
     await saveData(next);
   }
   const close = () => { if (!busy) { setDialog(null); setError(''); } };
+  const openAssignedTask = task => {
+    setPhaseId(task.phase.id);
+    setDialog({ type: isPM ? 'editItem' : user.role === 'contributor' ? 'contributorItem' : 'viewItem', target: task.item, groupId: task.group.id, phaseId: task.phase.id });
+  };
   return <div className="tracker">
     <header className="topbar"><div className="identity"><span className="mark">B</span><div><h1>{data.project.name}</h1><p>{data.project.subtitle}</p></div></div>
       <div className="file-actions"><div className="account-badge"><strong>{user.name}</strong><span>{roles[user.role]}</span></div>
+        <button className="notification-button" disabled={busy} aria-label={`Task được giao: ${assignedTasks.length}`} title="Task được giao" onClick={() => setDialog({ type: 'assignments' })}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>{assignedTasks.filter(task => task.item.status !== 'done').length > 0 && <span>{assignedTasks.filter(task => task.item.status !== 'done').length}</span>}</button>
         <button disabled={busy || exporting} onClick={downloadReport}>{exporting ? 'Đang tạo PDF…' : 'Tải PDF'}</button>
         {isPM && <><button disabled={busy} onClick={openHistory}>Lịch sử</button><button disabled={busy} onClick={() => setDialog({ type: 'members' })}>Thành viên</button><button disabled={busy} onClick={() => setDialog({ type: 'control' })}>Control panel</button><button disabled={busy} className="accent" onClick={() => setDialog({ type: 'phase' })}>+ Phase</button></>}
         <button disabled={busy} onClick={logout}>Đăng xuất</button>
       </div>
     </header>
     <nav className="phase-nav" aria-label="Project phases">{data.phases.map((p, index) => <button key={p.id} style={{ '--phase-color': p.color || colors[index % colors.length] }} className={p.id === phase?.id ? 'active' : ''} onClick={() => setPhaseId(p.id)}><span>{p.symbol || index + 1}</span><b>{p.name}</b><small>{percentage(itemsOf(p))}%</small></button>)}</nav>
-    <div className="access-note">{isPM ? 'Quản lý phase, nhóm công việc và task của dự án.' : user.role === 'contributor' ? 'Bạn có thể xem tất cả task và tick hoàn thành task được giao cho mình.' : 'Chế độ chỉ xem · Bạn có thể xem task và tiến độ dự án.'}</div>
+    <div className="access-note">{isPM ? 'Quản lý phase, nhóm công việc và task của dự án.' : user.role === 'contributor' ? 'Bạn có thể cập nhật status, notes và tài liệu của task được giao cho mình.' : 'Chế độ chỉ xem · Bạn có thể xem task và tiến độ dự án.'}</div>
     {error && !dialog && <div className="page-error" role="alert">{error} <button onClick={() => location.reload()}>Tải dữ liệu mới nhất</button></div>}
     <main className="workspace"><aside className="overview"><ProgressPanel phases={data.phases}/><Breakdown items={allItems}/></aside><section className="work-area">
       <section className="phase-intro"><div><p>PHASE {data.phases.indexOf(phase) + 1} OF {data.phases.length}</p><h2>{phase?.name}</h2><span>{phase?.description}</span>{phase?.notes && <small className="content-note">{phase.notes}</small>}</div>
@@ -124,13 +134,14 @@ export function App() {
       </section>
       {!phase?.groups.length ? <section className="empty"><b>Chưa có nhóm công việc</b>{isPM && <button onClick={() => setDialog({ type: 'group' })}>+ Add group of work</button>}</section> : <div className="groups">{phase.groups.map(group => <Group key={group.id} group={group} user={user} busy={busy}
         onAdd={() => setDialog({ type: 'item', groupId: group.id })}
-        onEdit={item => setDialog({ type: isPM ? 'editItem' : 'viewItem', target: item, groupId: group.id })}
+        onEdit={item => setDialog({ type: isPM ? 'editItem' : user.role === 'contributor' && item.assigneeId === user.id ? 'contributorItem' : 'viewItem', target: item, groupId: group.id, phaseId: phase.id })}
         onEditGroup={() => setDialog({ type: 'editGroup', target: group })}
         onRemove={() => remove('group', group.id)} onRemoveItem={id => remove('item', group.id, id)} onToggle={item => toggle(group.id, item)}/>)}</div>}
     </section></main>
     <footer><span className={`sync ${busy ? 'saving' : error ? 'error' : 'saved'}`} role="status">{sync}</span></footer>
     <ReportDocument reportRef={reportRef} data={data} user={user}/>
     {dialog?.type === 'history' ? <History entries={history} onClose={close}/> :
+      dialog?.type === 'assignments' ? <Assignments tasks={assignedTasks} onClose={close} onOpen={openAssignedTask}/> :
       dialog?.type === 'members' ? <Members currentUserId={user.id} members={members} busy={busy} error={error} onClose={close} onCreate={async form => write('users', 'POST', form, x => setMembers(m => [...m, x.user]))} onActive={async member => write('users', 'PATCH', { id: member.id, active: !member.active }, x => setMembers(m => m.map(u => u.id === x.user.id ? x.user : u)))} onRole={async (member, role) => write('users', 'PATCH', { id: member.id, role }, x => { setMembers(m => m.map(u => u.id === x.user.id ? x.user : u)); setSnapshot(x.state); })} onDelete={async member => write('users', 'DELETE', { id: member.id }, x => { setMembers(m => m.filter(u => u.id !== x.userId)); setSnapshot(x.state); })}/> :
       dialog?.type === 'control' ? <ControlPanel data={data} busy={busy} error={error} onClose={close} onSave={async next => { if (await saveData(next)) close(); }}/> :
       dialog?.type === 'viewItem' ? <ItemDetails item={dialog.target} onClose={close}/> :
@@ -251,21 +262,24 @@ function Modal({ title, children, onClose, busy = false, error, onSubmit, wide =
 function Editor({ dialog, members, busy, error, onClose, onSave }) {
   const target = dialog.target || {};
   const content = ['phase','editPhase','group','editGroup'].includes(dialog.type);
+  const contributor = dialog.type === 'contributorItem';
   const [form, setForm] = useState({ name: target.name || '', description: target.description || '', title: target.title || '', owner: target.owner || '', assigneeId: target.assigneeId || '', status: target.status || 'todo', due: target.due || '', notes: target.notes || '', documentName: target.documentName || '', documentUrl: target.documentUrl || '' });
   const field = (key, value) => setForm(f => ({ ...f, [key]: value }));
-  const title = { phase: 'New phase', editPhase: 'Edit phase', group: 'New group of work', editGroup: 'Edit group', item: 'New item', editItem: 'Edit item' }[dialog.type];
+  const title = { phase: 'New phase', editPhase: 'Edit phase', group: 'New group of work', editGroup: 'Edit group', item: 'New item', editItem: 'Edit item', contributorItem: 'Cập nhật task' }[dialog.type];
   function submit() {
     if (content) onSave({ name: form.name.trim(), description: form.description.trim(), notes: form.notes.trim() });
+    else if (contributor) onSave({ status: form.status, notes: form.notes.trim(), documentName: form.documentName.trim(), documentUrl: form.documentUrl.trim() });
     else onSave({ title: form.title.trim(), owner: form.owner, assigneeId: form.assigneeId, status: form.status, due: form.due, notes: form.notes.trim(), documentName: form.documentName.trim(), documentUrl: form.documentUrl.trim(), previousStatus: form.status !== target.status ? 'todo' : target.previousStatus || 'todo' });
   }
   return <Modal title={title} busy={busy} error={error} onClose={onClose} onSubmit={submit}>
     <fieldset disabled={busy} className="form-fields">{content ? <><label>Name<input required maxLength={200} value={form.name} onChange={e => field('name', e.target.value)}/></label><label>Description<textarea maxLength={5000} value={form.description} onChange={e => field('description', e.target.value)}/></label></> : <>
-      <label>Item name<input required maxLength={500} value={form.title} onChange={e => field('title', e.target.value)}/></label>
-      <div className="form-grid"><label>Người phụ trách<select value={form.assigneeId} onChange={e => { const id = e.target.value; setForm(f => ({ ...f, assigneeId: id, owner: members.find(u => u.id === id)?.name || '' })); }}>
+      <label>Item name<input required readOnly={contributor} className={contributor ? 'locked-field' : ''} maxLength={500} value={form.title} onChange={e => field('title', e.target.value)}/></label>
+      {contributor && <p className="permission-hint">Bạn có thể cập nhật status, tài liệu và notes. Tên task, người phụ trách và due date do Project Manager quản lý.</p>}
+      <div className="form-grid"><label>Người phụ trách{contributor ? <input className="locked-field" readOnly value={form.owner || 'Chưa assign'}/> : <select value={form.assigneeId} onChange={e => { const id = e.target.value; setForm(f => ({ ...f, assigneeId: id, owner: members.find(u => u.id === id)?.name || '' })); }}>
         <option value="">{!form.assigneeId && form.owner ? `${form.owner} (chưa liên kết tài khoản)` : 'Chưa assign'}</option>
         {members.filter(u => u.role !== 'viewer' && (u.active || u.id === form.assigneeId)).map(u => <option key={u.id} value={u.id}>{u.name} (@{u.username}){u.active ? '' : ' · đã khóa'}</option>)}
-      </select></label><label>Status<select value={form.status} onChange={e => field('status', e.target.value)}>{Object.entries(statuses).map(([v,label]) => <option key={v} value={v}>{label}</option>)}</select></label><label>Due date<input type="date" value={form.due} onChange={e => field('due', e.target.value)}/></label></div>
-      {!form.assigneeId && form.owner && <p className="field-hint">Chọn tài khoản để người phụ trách có quyền tick task này.</p>}
+      </select>}</label><label>Status<select value={form.status} onChange={e => field('status', e.target.value)}>{Object.entries(statuses).map(([v,label]) => <option key={v} value={v}>{label}</option>)}</select></label><label>Due date<input className={contributor ? 'locked-field' : ''} readOnly={contributor} type="date" value={form.due} onChange={e => field('due', e.target.value)}/></label></div>
+      {!contributor && !form.assigneeId && form.owner && <p className="field-hint">Chọn tài khoản để người phụ trách có quyền tick task này.</p>}
       <div className="document-grid"><label>Tên tài liệu<input required={Boolean(form.documentUrl)} maxLength={200} value={form.documentName} onChange={e => field('documentName', e.target.value)} placeholder="Ví dụ: Product brief"/></label><label>Link tài liệu<input required={Boolean(form.documentName)} type="url" pattern="https?://.+" maxLength={2000} value={form.documentUrl} onChange={e => field('documentUrl', e.target.value)} placeholder="https://…"/></label></div>
       <p className="field-hint document-hint">Nhập đủ tên và link tài liệu. Chỉ hỗ trợ link http/https.</p>
     </>}
@@ -273,6 +287,15 @@ function Editor({ dialog, members, busy, error, onClose, onSave }) {
   </Modal>;
 }
 function ItemDetails({ item, onClose }) { const href = documentHref(item.documentUrl); return <Modal title={item.title} onClose={onClose}><dl className="task-details"><dt>Người phụ trách</dt><dd>{item.owner || 'Chưa assign'}</dd><dt>Deadline</dt><dd>{dateLabel(item.due)}</dd><dt>Status</dt><dd>{statuses[item.status]}</dd><dt>Notes</dt><dd>{item.notes || 'Chưa có ghi chú'}</dd><dt>Tài liệu</dt><dd>{item.documentName && href ? <span className="detail-document"><span>{item.documentName}</span><a href={href} target="_blank" rel="noopener noreferrer">Open link ↗</a></span> : 'Chưa có tài liệu'}</dd></dl></Modal>; }
+function Assignments({ tasks, onClose, onOpen }) {
+  const ordered = [...tasks].sort((a, b) => (a.item.status === 'done') - (b.item.status === 'done') || (a.item.due || '9999').localeCompare(b.item.due || '9999'));
+  return <Modal title="Task được giao" wide onClose={onClose}>
+    <p className="field-hint">Danh sách task đang được assign cho tài khoản của bạn.</p>
+    {!ordered.length ? <div className="assignment-empty">Bạn chưa được assign task nào.</div> : <div className="assignment-list">{ordered.map(({ item, group, phase }) => <button type="button" className="assignment-row" key={item.id} onClick={() => onOpen({ item, group, phase })}>
+      <span className={`assignment-dot ${item.status}`}/><span><strong>{item.title}</strong><small>{phase.name} · {group.name}</small></span><span className="assignment-meta"><i className={`status ${item.status}`}>{statuses[item.status]}</i><small>{dateLabel(item.due)}</small></span>
+    </button>)}</div>}
+  </Modal>;
+}
 function History({ entries, onClose }) {
   const when = value => new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
   return <Modal title="Lịch sử hoàn thành" wide onClose={onClose}>
